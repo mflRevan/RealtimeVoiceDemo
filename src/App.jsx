@@ -7,7 +7,7 @@ function App() {
   const [log, setLog] = useState([]);
   const [password, setPassword] = useState('');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [isCalling, setIsCalling] = useState(false);
+  const [callStatus, setCallStatus] = useState('offline');
   const chatWindowRef = useRef(null);
   const sseRef = useRef(null);
 
@@ -39,8 +39,9 @@ function App() {
       await api.post('/api/call/instructions/set', { instructions });
       const response = await api.post('/api/call/start', { phoneNumber });
       console.log(response.data.message);
-      setIsCalling(true);
-      startTranscriptionLog();
+      setLog([]);
+      setCallStatus('pending');
+      startSseUpdates();
     } catch (error) {
       console.error('Call initiation failed:', error.response?.data?.error || error.message);
       alert(error.response?.data?.error || 'Failed to initiate call');
@@ -56,7 +57,7 @@ function App() {
     try {
       const response = await api.post('/api/call/end');
       console.log(response.data.message);
-      setIsCalling(false);
+      setCallStatus('offline');
       stopTranscriptionLog();
     } catch (error) {
       console.error('Ending call failed:', error.response?.data?.error || error.message);
@@ -64,15 +65,27 @@ function App() {
     }
   };
 
-  const startTranscriptionLog = () => {
+  const startSseUpdates = () => {
     if (sseRef.current) return;
-    sseRef.current = new EventSource(`${import.meta.env.VITE_BACKEND_URL}/api/call/transcription-log`, {
+    sseRef.current = new EventSource(`${import.meta.env.VITE_BACKEND_URL}/api/call/live-updates`, {
       withCredentials: true,
     });
 
     sseRef.current.onmessage = (event) => {
       const message = JSON.parse(event.data);
-      setLog((prevLog) => [...prevLog, { sender: message.type === 'mona' ? 'Mona' : 'User', text: message.transcription }]);
+      if (message.type === 'transcript') {
+        setLog((prevLog) => [
+          ...prevLog,
+          { sender: message.content.role === 'mona' ? 'Mona' : 'User', text: message.content.text },
+        ]);
+      } else if (message.type === 'callStarted') {
+        setCallStatus('online');
+      } else if (message.type === 'callEnded') {
+        setCallStatus('offline');
+        // Temp solution to show summary
+        setLog((prevLog) => [...prevLog, { sender: 'Mona', text: message.summary }]);
+        stopTranscriptionLog;
+      }
     };
 
     sseRef.current.onerror = (error) => {
@@ -128,9 +141,13 @@ function App() {
           ></textarea>
 
           <div className="flex space-x-4 w-full">
-            {isCalling ? (
+            {callStatus === 'online' ? (
               <button onClick={endCall} className="btn btn-secondary w-full">
                 End Call
+              </button>
+            ) : callStatus === 'pending' ? (
+              <button className="btn btn-warning w-full" disabled>
+                Calling...
               </button>
             ) : (
               <button onClick={startCall} className="btn btn-primary bg-blue-500 w-full">
