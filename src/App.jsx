@@ -1,23 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
+import api from './api';
 
 function App() {
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [instructions, setInstructions] = useState('');
-  const [log, setLog] = useState([
-    { sender: 'Mona', text: 'Hello, how can I assist you today?' },
-    { sender: 'User', text: 'I would like to know more about your services.' },
-    { sender: 'Mona', text: 'Sure, we offer a variety of services including customer support and sales.' },
-    { sender: 'User', text: 'That sounds great. Can you tell me more about your sales process?' },
-    { sender: 'Mona', text: 'Of course! Our sales process is designed to be customer-friendly and efficient.' },
-    { sender: 'User', text: 'That sounds great. Can you tell me more about your sales process?' },
-    { sender: 'Mona', text: 'Of course! Our sales process is designed to be customer-friendly and efficient.' },
-    { sender: 'User', text: 'I would like to know more about your services.' },
-    { sender: 'Mona', text: 'Sure, we offer a variety of services including customer support and sales.' },
-    { sender: 'User', text: 'I would like to know more about your services.' },
-    { sender: 'Mona', text: 'Sure, we offer a variety of services including customer support and sales.' },
-  ]);
-
+  const [phoneNumber, setPhoneNumber] = useState('+4915251354115');
+  const [instructions, setInstructions] = useState('Dein name ist Mona. Du bist ein netter Assistent.');
+  const [log, setLog] = useState([]);
+  const [password, setPassword] = useState('');
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isCalling, setIsCalling] = useState(false);
   const chatWindowRef = useRef(null);
+  const sseRef = useRef(null);
 
   useEffect(() => {
     if (chatWindowRef.current) {
@@ -25,32 +17,129 @@ function App() {
     }
   }, [log]);
 
+  const handleLogin = async () => {
+    try {
+      const response = await api.post('/api/call/adminlogin', { password });
+      setIsLoggedIn(true);
+      setPassword('');
+      console.log(response.data.message);
+    } catch (error) {
+      console.error('Login failed:', error.response?.data?.error || error.message);
+      alert(error.response?.data?.error || 'Login failed');
+    }
+  };
+
+  const startCall = async () => {
+    if (!isLoggedIn) {
+      alert('Please log in first');
+      return;
+    }
+
+    try {
+      await api.post('/api/call/instructions/set', { instructions });
+      const response = await api.post('/api/call/start', { phoneNumber });
+      console.log(response.data.message);
+      setIsCalling(true);
+      startTranscriptionLog();
+    } catch (error) {
+      console.error('Call initiation failed:', error.response?.data?.error || error.message);
+      alert(error.response?.data?.error || 'Failed to initiate call');
+    }
+  };
+
+  const endCall = async () => {
+    if (!isLoggedIn) {
+      alert('Please log in first');
+      return;
+    }
+
+    try {
+      const response = await api.post('/api/call/end');
+      console.log(response.data.message);
+      setIsCalling(false);
+      stopTranscriptionLog();
+    } catch (error) {
+      console.error('Ending call failed:', error.response?.data?.error || error.message);
+      alert(error.response?.data?.error || 'Failed to end call');
+    }
+  };
+
+  const startTranscriptionLog = () => {
+    if (sseRef.current) return;
+    sseRef.current = new EventSource(`${import.meta.env.VITE_BACKEND_URL}/api/call/transcription-log`, {
+      withCredentials: true,
+    });
+
+    sseRef.current.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      setLog((prevLog) => [...prevLog, { sender: message.type === 'mona' ? 'Mona' : 'User', text: message.transcription }]);
+    };
+
+    sseRef.current.onerror = (error) => {
+      console.error('SSE Error:', error);
+      stopTranscriptionLog();
+    };
+  };
+
+  const stopTranscriptionLog = () => {
+    if (sseRef.current) {
+      sseRef.current.close();
+      sseRef.current = null;
+    }
+  };
+
   return (
     <div className="flex flex-col items-center justify-center min-h-screen space-y-8 bg-gray-900 text-white">
       <h1 className="text-7xl font-bold">
         Let <span className="text-blue-500">Mona</span> Make A Call
       </h1>
 
-      <div className="flex flex-col items-center space-y-4 w-full max-w-md">
-        <span className="text-sm text-gray-400">Phonenumber to call</span>
-        <input
-          className="input input-bordered w-full"
-          type="text"
-          placeholder="Enter Phone Number"
-          onChange={(e) => setPhoneNumber(e.target.value)}
-        />
+      {!isLoggedIn ? (
+        <div className="flex flex-col items-center space-y-4 w-full max-w-md">
+          <span className="text-sm text-gray-400">Admin Password</span>
+          <input
+            className="input input-bordered w-full"
+            type="password"
+            placeholder="Enter Admin Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <button onClick={handleLogin} className="btn btn-primary bg-blue-500 w-full mt-4">
+            Log In
+          </button>
+        </div>
+      ) : (
+        <div className="flex flex-col items-center space-y-4 w-full max-w-md">
+          <span className="text-sm text-gray-400">Phone Number to Call</span>
+          <input
+            className="input input-bordered w-full"
+            type="text"
+            placeholder="Enter Phone Number"
+            value={phoneNumber}
+            onChange={(e) => setPhoneNumber(e.target.value)}
+          />
 
-        <span className="text-sm text-gray-400">Tell Mona what to do</span>
-        <textarea
-          className="textarea textarea-bordered w-full p-2 min-h-40"
-          placeholder="Mona's instructions"
-          defaultValue={'You are a call center agent interviewing customers on cars...'}
-          onChange={(e) => setInstructions(e.target.value)}
-        ></textarea>
+          <span className="text-sm text-gray-400">Tell Mona what to do</span>
+          <textarea
+            className="textarea textarea-bordered w-full p-2 min-h-40"
+            placeholder="Mona's instructions"
+            value={instructions}
+            onChange={(e) => setInstructions(e.target.value)}
+          ></textarea>
 
-        <button className="btn btn-primary bg-blue-500 w-full mt-4">Call</button>
-        {/* <button className="btn btn-circle btn-outline w-full btn-lg">Call</button> */}
-      </div>
+          <div className="flex space-x-4 w-full">
+            {isCalling ? (
+              <button onClick={endCall} className="btn btn-secondary w-full">
+                End Call
+              </button>
+            ) : (
+              <button onClick={startCall} className="btn btn-primary bg-blue-500 w-full">
+                Start Call
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       <div
         ref={chatWindowRef}
